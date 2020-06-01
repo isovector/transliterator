@@ -1,29 +1,32 @@
+{-# LANGUAGE PatternSynonyms #-}
+
 module Main where
 
+import Data.Void
 import Control.Applicative
 import Control.Arrow
 import Control.Monad.Trans.State
 import Data.Char
-import Data.Either
 import Test.DocTest
 import Text.Printf
+import Data.Maybe
 
 -- $setup
 -- >>> let testParser p = fmap unparse . evalParser p . parseLexemeW
--- 
+--
 -- >>> let jsForeachSource = "for (let i of [1,2,3]) {console.log(i);}"
 -- >>> let jsForeachPattern = "for (let VAR of LIST) {...}"
 -- >>> let cppForeachPattern = "for (... VAR = LIST.begin(); VAR != LIST.end(); ++VAR) {...}"
 -- >>> let scalaForeachPattern = "LIST.foreach { VAR => ... }"
--- 
+--
 -- >>> let jsForeachSourceW = parseLexemeW jsForeachSource
--- 
+--
 -- >>> let jsForeachPatternV = parseLexemeV jsForeachPattern
 -- >>> let jsForeachPatternVM = parseLexemeVW jsForeachPattern
--- 
+--
 -- >>> let cppForeachPatternV = parseLexemeV cppForeachPattern
 -- >>> let cppForeachPatternVM = parseLexemeVW cppForeachPattern
--- 
+--
 -- >>> let scalaForeachPatternV = parseLexemeV scalaForeachPattern
 -- >>> let scalaForeachPatternVM = parseLexemeVW scalaForeachPattern
 
@@ -63,7 +66,13 @@ instance Unparse Whitespace where
     unparse (Blank   s) = s
     unparse (Comment s) = "//" ++ s
 
-type LexemeW = Either Whitespace Lexeme
+type LexemeW = LexemeVW' Void ()
+
+lwLexes :: [LexemeW] -> [Lexeme]
+lwLexes = mapMaybe lwLexemeOf
+  where
+    lwLexemeOf (LLex l) = Just l
+    lwLexemeOf _         = Nothing
 
 -- |
 -- >>> mapM_ print jsForeachSourceW
@@ -94,30 +103,30 @@ type LexemeW = Either Whitespace Lexeme
 -- Right (Close ")")
 -- Right (Symbol ";")
 -- Right (Close "}")
--- 
+--
 -- >>> mapM_ print $ parseLexemeW "// important comment"
 -- Left (Comment " important comment")
 parseLexemeW :: String -> [LexemeW]
 parseLexemeW [] = []
 parseLexemeW (c:cs) | isAlphaNum c = case parseLexemeW cs of
-    Right (Alphanum s) : ls -> Right (Alphanum (c:s)) : ls
-    ls                      -> Right (Alphanum [c]  ) : ls
-parseLexemeW ('\n':cs) = Left Newline : parseLexemeW cs
+    LLex (Alphanum s) : ls -> LLex (Alphanum (c:s)) : ls
+    ls                      -> LLex (Alphanum [c]  ) : ls
+parseLexemeW ('\n':cs) = LWhite Newline : parseLexemeW cs
 parseLexemeW (c:cs) | isSpace c = case parseLexemeW cs of
-    Left (Blank s) : ls -> Left (Blank (c:s)) : ls
-    ls                  -> Left (Blank [c]  ) : ls
-parseLexemeW ('/':'/':cs) = Left (Comment comment) : parseLexemeW cs'
+    LWhite (Blank s) : ls -> LWhite (Blank (c:s)) : ls
+    ls                  -> LWhite (Blank [c]  ) : ls
+parseLexemeW ('/':'/':cs) = LWhite (Comment comment) : parseLexemeW cs'
   where
     (comment, cs') = break (== '\n') cs
-parseLexemeW ('{':cs) = Right (Open  "{") : parseLexemeW cs
-parseLexemeW ('[':cs) = Right (Open  "[") : parseLexemeW cs
-parseLexemeW ('(':cs) = Right (Open  "(") : parseLexemeW cs
-parseLexemeW (')':cs) = Right (Close ")") : parseLexemeW cs
-parseLexemeW (']':cs) = Right (Close "]") : parseLexemeW cs
-parseLexemeW ('}':cs) = Right (Close "}") : parseLexemeW cs
+parseLexemeW ('{':cs) = LLex (Open  "{") : parseLexemeW cs
+parseLexemeW ('[':cs) = LLex (Open  "[") : parseLexemeW cs
+parseLexemeW ('(':cs) = LLex (Open  "(") : parseLexemeW cs
+parseLexemeW (')':cs) = LLex (Close ")") : parseLexemeW cs
+parseLexemeW (']':cs) = LLex (Close "]") : parseLexemeW cs
+parseLexemeW ('}':cs) = LLex (Close "}") : parseLexemeW cs
 parseLexemeW (c:cs) = case parseLexemeW cs of
-    Right (Symbol s) : ls -> Right (Symbol (c:s)) : ls
-    ls                    -> Right (Symbol [c]  ) : ls
+    LLex (Symbol s) : ls -> LLex (Symbol (c:s)) : ls
+    ls                    -> LLex (Symbol [c]  ) : ls
 
 matchingParen :: String -> String
 matchingParen "{" = "}"
@@ -138,7 +147,7 @@ isVar (Alphanum s) | all isUpper s = Just (Var s)
 isVar _ = Nothing
 
 
-type LexemeV = Either Var Lexeme
+type LexemeV = LexemeVW' () Void
 
 -- |
 -- >>> mapM_ print jsForeachPatternV
@@ -153,15 +162,38 @@ type LexemeV = Either Var Lexeme
 -- Left (Var "...")
 -- Right (Close "}")
 parseLexemeV :: String -> [LexemeV]
-parseLexemeV = fmap go . rights . parseLexemeW
+parseLexemeV = fmap go . lwLexes . parseLexemeW
   where
     go :: Lexeme -> LexemeV
     go x = case isVar x of
-        Just v  -> Left v
-        Nothing -> Right x
+        Just v  -> LVar v
+        Nothing -> LLex x
 
 
-type LexemeVW = Either Var LexemeW
+data LexemeVW' var white
+  = LVar' var Var
+  | LWhite' white Whitespace
+  | LLex Lexeme
+  deriving (Eq, Show)
+
+type LexemeVW = LexemeVW' () ()
+
+
+pattern LVar :: Var -> LexemeVW' () white
+pattern LVar v <- LVar' () v
+  where
+    LVar v = LVar' () v
+
+pattern LWhite :: Whitespace -> LexemeVW' var ()
+pattern LWhite v <- LWhite' () v
+  where
+    LWhite v = LWhite' () v
+
+{-# COMPLETE LLex, LVar, LWhite #-}
+{-# COMPLETE LLex, LVar, LWhite' #-}
+{-# COMPLETE LLex, LVar', LWhite' #-}
+{-# COMPLETE LLex, LVar', LWhite #-}
+
 
 -- |
 -- >>> mapM_ print scalaForeachPatternVM
@@ -182,10 +214,11 @@ parseLexemeVW :: String -> [LexemeVW]
 parseLexemeVW = fmap go . parseLexemeW
   where
     go :: LexemeW -> LexemeVW
-    go (Left  w) = Right (Left w)
-    go (Right x) = case isVar x of
-        Just v  -> Left v
-        Nothing -> Right (Right x)
+    go (LWhite  w) = LWhite w
+    go (LLex x) = case isVar x of
+        Just v  -> LVar v
+        Nothing -> LLex x
+    go (LVar' void _) = absurd void
 
 
 type Subst1 = (Var,[LexemeW])
@@ -199,8 +232,8 @@ substitute11 (var,replacement) = go
   where
     go :: [LexemeVW] -> [LexemeVW]
     go []                     = []
-    go (Left v:xs) | v == var = fmap Right replacement ++ xs
-    go (x     :xs)            = x : go xs 
+    go (LVar v:xs) | v == var = fmap lwToLVW replacement ++ xs
+    go (x     :xs)            = x : go xs
 
 -- | substitute all occurrences of one variable.
 -- >>> unparse $ substitute1 (Var "VAR", parseLexemeW "i") cppForeachPatternVM
@@ -210,17 +243,22 @@ substitute1 (var,replacement) = go
   where
     go :: [LexemeVW] -> [LexemeVW]
     go []                     = []
-    go (Left v:xs) | v == var = fmap Right replacement ++ go xs
-    go (x     :xs)            = x : go xs 
+    go (LVar v:xs) | v == var = fmap lwToLVW replacement ++ go xs
+    go (x     :xs)            = x : go xs
+
+lwToLVW :: LexemeVW' a b -> LexemeVW
+lwToLVW (LVar' _ w)   = LVar w
+lwToLVW (LWhite' _ w) = LWhite w
+lwToLVW (LLex w)      = LLex w
 
 -- | Substitute all occurrences of all variables.
--- 
+--
 -- The same variable (usually "...") can appear more than once in the
 -- replacements, in which case each occurrence of that variable in the input
 -- will be replaced with the corresponding replacement.
 -- A variable can also appear once in the replacements, in which case all the
 -- occurrences of that variable in the input will become that replacement.
--- 
+--
 -- >>> :{
 -- unparse $ substitute [ (Var "...", parseLexemeW "map<int,string>::key_iterator")
 --                      , (Var "VAR", parseLexemeW "i")
@@ -236,16 +274,17 @@ substitute replacements = fmap assertR
   where
     compose :: [a -> a] -> (a -> a)
     compose = foldr (>>>) id
-    
+
     substituteOnce :: Subst -> [LexemeVW] -> [LexemeVW]
     substituteOnce = compose . fmap substitute11
-    
+
     substituteAll :: Subst -> [LexemeVW] -> [LexemeVW]
     substituteAll = compose . fmap substitute1
-    
+
     assertR :: LexemeVW -> LexemeW
-    assertR (Left (Var var)) = error $ printf "'%s' not in scope" var
-    assertR (Right x) = x
+    assertR (LVar (Var var)) = error $ printf "'%s' not in scope" var
+    assertR (LWhite x) = LWhite x
+    assertR (LLex x) = LLex x
 
 
 type Parser a = StateT [LexemeW] [] a
@@ -283,7 +322,7 @@ pWhitespace :: Parser Whitespace
 pWhitespace = pMaybeToken go
   where
     go :: LexemeW -> Maybe Whitespace
-    go (Left w) = Just w
+    go (LWhite w) = Just w
     go _ = Nothing
 
 -- | greedily eat as much whitespace as possible
@@ -299,7 +338,7 @@ pLexeme :: Parser Lexeme
 pLexeme = pMaybeToken go
   where
     go :: LexemeW -> Maybe Lexeme
-    go (Right x) = Just x
+    go (LLex x) = Just x
     go _ = Nothing
 
 pLexemeW :: Parser LexemeW
@@ -309,14 +348,14 @@ pOpen :: Parser String
 pOpen = pMaybeToken go
   where
     go :: LexemeW -> Maybe String
-    go (Right (Open s)) = Just s
+    go (LLex (Open s)) = Just s
     go _ = Nothing
 
 pClose :: Parser String
 pClose = pMaybeToken go
   where
     go :: LexemeW -> Maybe String
-    go (Right (Close s)) = Just s
+    go (LLex (Close s)) = Just s
     go _ = Nothing
 
 -- not an Open nor a Close
@@ -324,8 +363,8 @@ pFlatLexemeW :: Parser LexemeW
 pFlatLexemeW = pMaybeToken go
   where
     go :: LexemeW -> Maybe LexemeW
-    go (Right (Open  _)) = Nothing
-    go (Right (Close _)) = Nothing
+    go (LLex (Open  _)) = Nothing
+    go (LLex (Close _)) = Nothing
     go x = Just x
 
 -- not an Open nor a Close
@@ -333,9 +372,9 @@ pFlatLexeme :: Parser Lexeme
 pFlatLexeme = pMaybeToken go
   where
     go :: LexemeW -> Maybe Lexeme
-    go (Right (Open  _)) = Nothing
-    go (Right (Close _)) = Nothing
-    go (Right x) = Just x
+    go (LLex (Open  _)) = Nothing
+    go (LLex (Close _)) = Nothing
+    go (LLex x) = Just x
     go _ = Nothing
 
 -- match as little as possible, possibly nothing.
@@ -355,8 +394,8 @@ pWildcard0 = return []
 -- *** Exception: mismatched parens: '(' and ']'
 pWildcard :: Parser [LexemeW]
 pWildcard = ((++) <$> pNesting                <*> pWildcard0)
-        <|> ((:)  <$> (Right <$> pFlatLexeme) <*> pWildcard0)
-        <|> ((:)  <$> (Left  <$> pWhitespace) <*> pWildcard )
+        <|> ((:)  <$> (LLex <$> pFlatLexeme) <*> pWildcard0)
+        <|> ((:)  <$> (LWhite  <$> pWhitespace) <*> pWildcard )
 
 -- | like pWildcard, plus extra whitespace.
 -- >>> testParser pWildcardW "foo.bar(baz)"
@@ -364,7 +403,7 @@ pWildcard = ((++) <$> pNesting                <*> pWildcard0)
 -- >>> testParser pWildcardW "  foo // important comment\n    .bar(baz)"
 -- Just "  foo // important comment\n    "
 pWildcardW :: Parser [LexemeW]
-pWildcardW = (++) <$> pWildcard <*> (fmap Left <$> pWhitespaces)
+pWildcardW = (++) <$> pWildcard <*> (fmap LWhite <$> pWhitespaces)
 
 pNesting :: Parser [LexemeW]
 pNesting = do
@@ -372,9 +411,9 @@ pNesting = do
     xs <- pWildcard0
     sClose <- pClose
     if matchingParen sOpen == sClose
-    then return $ [Right (Open sOpen)]
+    then return $ [LLex (Open sOpen)]
                ++ xs
-               ++ [Right (Close sClose)]
+               ++ [LLex (Close sClose)]
     else error $ printf "mismatched parens: '%s' and '%s'" sOpen sClose
 
 
@@ -387,17 +426,18 @@ pMatchVar v = (,) <$> pure v <*> (clean <$> pWildcardW)
           . dropWhile isBlank
           . reverse
           . dropWhile isBlank
-    
+
     isBlank :: LexemeW -> Bool
-    isBlank (Left (Blank _)) = True
+    isBlank (LWhite (Blank _)) = True
     isBlank _ = False
 
 pMatchPattern :: [LexemeV] -> Parser Subst
 pMatchPattern []           = return []
-pMatchPattern (Right x:xs) = pWhitespaces
-                          >> pExactToken (Right x)
+pMatchPattern (LLex x:xs) = pWhitespaces
+                          >> pExactToken (LLex x)
                           >> pMatchPattern xs
-pMatchPattern (Left  v:xs) = (:) <$> pMatchVar v <*> pMatchPattern xs
+pMatchPattern (LVar  v:xs) = (:) <$> pMatchVar v <*> pMatchPattern xs
+pMatchPattern (LWhite' void _:_) = absurd void
 
 
 -- |
@@ -407,17 +447,17 @@ pMatchPattern (Left  v:xs) = (:) <$> pMatchVar v <*> pMatchPattern xs
 --                                                      (parseLexemeVW toPattern)
 --                                                      (parseLexemeW input)
 -- :}
--- 
+--
 -- >>> test jsForeachPattern scalaForeachPattern jsForeachSource
 -- "[1,2,3].foreach { i => console.log(i); }"
--- 
+--
 -- >>> :{
 -- test "for (CTOR<TYPE>::iterator VAR = LIST.begin(); VAR != LIST.end(); ++VAR) {...}"
 --      "LIST.foreach { VAR: TYPE => ... }"
 --      "for (vector<int>::iterator i = myVector.begin(); i != myVector.end(); ++i) {cout << *i << endl;}"
 -- :}
 -- "myVector.foreach { i: int => cout << *i << endl; }"
--- 
+--
 -- >>> :{
 -- test "cout << *EXPR << endl;"
 --      "println(EXPR)"
@@ -430,7 +470,7 @@ transliterate patternFrom patternTo = go
   where
     parser :: Parser Subst
     parser = pMatchPattern patternFrom
-    
+
     go :: [LexemeW] -> [LexemeW]
     go [] = []
     go (x:xs) = case runParser parser (x:xs) of
@@ -441,3 +481,4 @@ transliterate patternFrom patternTo = go
 
 main :: IO ()
 main = doctest ["src/Main.hs"]
+

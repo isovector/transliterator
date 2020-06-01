@@ -1,0 +1,11 @@
+resolver: lts-15.0
+
+packages:
+- .
+
+extra-deps:
+- quickspec-2.1.2@sha256:45293f0dde8c007886a4e59a53ff689f54cedeb5f6bd677e77b0225059af3264,3654
+- twee-lib-2.2@sha256:9fe9327505d8f450a94f2fc9eea74b292901b7992d520aa1dd4f0410fbe0e594,2112
+
+
+
