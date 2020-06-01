@@ -1,7 +1,9 @@
+{-# LANGUAGE DeriveGeneric   #-}
 {-# LANGUAGE PatternSynonyms #-}
 
 module Main where
 
+import GHC.Generics
 import Data.Void
 import Control.Applicative
 import Control.Arrow
@@ -11,7 +13,7 @@ import Test.DocTest
 import Text.Printf
 import Data.Maybe
 
--- $setup
+
 -- >>> let testParser p = fmap unparse . evalParser p . parseLexemeW
 --
 -- >>> let jsForeachSource = "for (let i of [1,2,3]) {console.log(i);}"
@@ -46,7 +48,7 @@ data Lexeme
   | Symbol     String
   | Open       String
   | Close      String
-  deriving (Show, Eq)
+  deriving (Show, Eq, Ord, Generic)
 
 instance Unparse Lexeme where
     unparse (Alphanum s) = s
@@ -59,7 +61,7 @@ data Whitespace
   = Newline
   | Blank   String
   | Comment String
-  deriving (Show, Eq)
+  deriving (Show, Eq, Ord, Generic)
 
 instance Unparse Whitespace where
     unparse Newline     = "\n"
@@ -136,7 +138,7 @@ matchingParen s   = error $ printf "unrecognized paren '%s'" s
 
 
 newtype Var = Var String
-  deriving (Show, Eq)
+  deriving (Show, Eq, Ord, Generic)
 
 instance Unparse Var where
     unparse (Var s) = s
@@ -174,7 +176,7 @@ data LexemeVW' var white
   = LVar' var Var
   | LWhite' white Whitespace
   | LLex Lexeme
-  deriving (Eq, Show)
+  deriving (Eq, Show, Ord, Generic)
 
 type LexemeVW = LexemeVW' () ()
 
@@ -211,24 +213,29 @@ pattern LWhite v <- LWhite' () v
 -- Right (Left (Blank " "))
 -- Right (Right (Close "}"))
 parseLexemeVW :: String -> [LexemeVW]
-parseLexemeVW = fmap go . parseLexemeW
-  where
-    go :: LexemeW -> LexemeVW
-    go (LWhite  w) = LWhite w
-    go (LLex x) = case isVar x of
-        Just v  -> LVar v
-        Nothing -> LLex x
-    go (LVar' void _) = absurd void
+parseLexemeVW = fmap expandVars . parseLexemeW
 
+expandVars :: LexemeW -> LexemeVW
+expandVars (LWhite  w) = LWhite w
+expandVars (LLex x) =
+  case isVar x of
+    Just v  -> LVar v
+    Nothing -> LLex x
+expandVars (LVar' void _) = absurd void
 
-type Subst1 = (Var,[LexemeW])
+data Subst1 = Subst1
+  { substVar :: Var
+  , substReplacement :: [LexemeW]
+  }
+  deriving (Eq, Show, Ord, Generic)
+
 type Subst = [Subst1]
 
 -- | only substitute the first occurrence of one variable.
 -- >>> unparse $ substitute11 (Var "VAR", parseLexemeW "i") cppForeachPatternVM
 -- "for (... i = LIST.begin(); VAR != LIST.end(); ++VAR) {...}"
 substitute11 :: Subst1 -> [LexemeVW] -> [LexemeVW]
-substitute11 (var,replacement) = go
+substitute11 (Subst1 var replacement) = go
   where
     go :: [LexemeVW] -> [LexemeVW]
     go []                     = []
@@ -239,12 +246,11 @@ substitute11 (var,replacement) = go
 -- >>> unparse $ substitute1 (Var "VAR", parseLexemeW "i") cppForeachPatternVM
 -- "for (... i = LIST.begin(); i != LIST.end(); ++i) {...}"
 substitute1 :: Subst1 -> [LexemeVW] -> [LexemeVW]
-substitute1 (var,replacement) = go
-  where
-    go :: [LexemeVW] -> [LexemeVW]
-    go []                     = []
-    go (LVar v:xs) | v == var = fmap lwToLVW replacement ++ go xs
-    go (x     :xs)            = x : go xs
+substitute1 subst = concatMap $ subst1 subst
+
+subst1 :: Subst1 -> LexemeVW -> [LexemeVW]
+subst1 (Subst1 var replacement) (LVar v) | v == var = fmap lwToLVW replacement
+subst1 _ (x     )            = [x]
 
 lwToLVW :: LexemeVW' a b -> LexemeVW
 lwToLVW (LVar' _ w)   = LVar w
@@ -418,7 +424,7 @@ pNesting = do
 
 
 pMatchVar :: Var -> Parser Subst1
-pMatchVar v = (,) <$> pure v <*> (clean <$> pWildcardW)
+pMatchVar v = Subst1 <$> pure v <*> (clean <$> pWildcardW)
   where
     -- remove blanks at the beginning and end
     clean :: [LexemeW] -> [LexemeW]
