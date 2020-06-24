@@ -19,7 +19,6 @@ executable transliterator
   -- other-modules:
   -- other-extensions:
   build-depends:       base >=4.8
-                     , doctest
                      , transformers
                      , QuickCheck
                      , quickspec

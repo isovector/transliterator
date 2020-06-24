@@ -2,6 +2,7 @@ resolver: lts-15.0
 
 packages:
 - .
+# - ../quickspec
 
 extra-deps:
 - quickspec-2.1.2@sha256:45293f0dde8c007886a4e59a53ff689f54cedeb5f6bd677e77b0225059af3264,3654

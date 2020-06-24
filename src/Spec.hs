@@ -1,5 +1,7 @@
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE TypeApplications  #-}
+{-# LANGUAGE BangPatterns          #-}
+{-# LANGUAGE FlexibleInstances     #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE TypeApplications      #-}
 
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
@@ -7,29 +9,44 @@ module Spec where
 
 import Control.Monad
 import Data.Char
-import Data.Void
 import Data.Proxy
 import Test.QuickCheck
 import QuickSpec
 import Main hiding (main)
-
+import Prelude hiding (lex)
 
 main :: IO ()
 main = quickSpec
-  [ withMaxTermSize 7
+  [ withMaxTermSize 8
   , withMaxTests 1000
+  -- , defaultTo $ Proxy @LexemeVW
+
   , background
-      [ con "map" $ map @A @B
-      , con ">=>" $ (>=>) @[] @A @B @C
-      , con "const" $ const @A @B
-      ]
-  , defaultTo $ Proxy @LexemeVW
+    [ -- con "pure" $ pure @[] @A
+    -- , lists
+     -- con "map" $ map @A @B
+      con ">=>" $ (>=>) @[] @A @B @C
+    ]
 
   , con "subst1" subst1
-  , monoTypeWithVars ["s"] $ Proxy @Subst1
-  , monoTypeWithVars ["lv"] $ Proxy @LexemeV
-  , monoTypeWithVars ["lw"] $ Proxy @LexemeW
+  -- , con "substitute1" substitute1
+  -- , con "var" $ var @A
+  -- , con "lex" $ lex @A @B
+  -- , con "white" $ white @A
+  -- , con "mkSubst" mkSubst
+  -- , con "inj" loosen
+
+  , monoTypeWithVars ["s"]   $ Proxy @Subst1
+  , monoTypeWithVars ["lv"]  $ Proxy @LexemeV
+  , monoTypeWithVars ["lw"]  $ Proxy @LexemeW
   , monoTypeWithVars ["lvw"] $ Proxy @LexemeVW
+  , monoTypeWithVars ["l"]   $ Proxy @Lexeme
+  , monoTypeWithVars ["v"]   $ Proxy @Var
+  , monoTypeWithVars ["w"]   $ Proxy @Whitespace
+  , monoTypeWithVars ["src"]   $ Proxy @Source
+  , monoTypeWithVars ["pat"]   $ Proxy @Pattern
+
+  -- , monoTypeObserve $ Proxy @Void
   ]
 
 instance Arbitrary Var where
@@ -40,7 +57,7 @@ instance Arbitrary Subst1 where
   arbitrary = Subst1 <$> arbitrary <*> arbitrary
   shrink = genericShrink
 
-instance Arbitrary (LexemeVW' () ()) where
+instance Arbitrary LexemeVW where
   arbitrary = oneof
     [ LVar   <$> arbitrary
     , LWhite <$> arbitrary
@@ -48,19 +65,19 @@ instance Arbitrary (LexemeVW' () ()) where
     ]
   shrink = genericShrink
 
-instance Arbitrary (LexemeVW' () Void) where
+instance Arbitrary LexemeV where
   arbitrary = oneof
     [ LVar   <$> arbitrary
     , LLex   <$> arbitrary
     ]
-  shrink = genericShrink
+  -- shrink = genericShrink
 
-instance Arbitrary (LexemeVW' Void ()) where
+instance Arbitrary LexemeW where
   arbitrary = oneof
     [ LWhite <$> arbitrary
     , LLex   <$> arbitrary
     ]
-  shrink = genericShrink
+  -- shrink = genericShrink
 
 instance Arbitrary Lexeme where
   arbitrary = oneof
@@ -78,7 +95,4 @@ instance Arbitrary Whitespace where
     , fmap (Comment . getPrintableString) arbitrary
     ]
   shrink = genericShrink
-
-instance Arbitrary Void where
-  arbitrary = error "void"
 

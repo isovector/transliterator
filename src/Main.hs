@@ -9,28 +9,7 @@ import Control.Applicative
 import Control.Arrow
 import Control.Monad.Trans.State
 import Data.Char
-import Test.DocTest
-import Text.Printf
 import Data.Maybe
-
-
--- >>> let testParser p = fmap unparse . evalParser p . parseLexemeW
---
--- >>> let jsForeachSource = "for (let i of [1,2,3]) {console.log(i);}"
--- >>> let jsForeachPattern = "for (let VAR of LIST) {...}"
--- >>> let cppForeachPattern = "for (... VAR = LIST.begin(); VAR != LIST.end(); ++VAR) {...}"
--- >>> let scalaForeachPattern = "LIST.foreach { VAR => ... }"
---
--- >>> let jsForeachSourceW = parseLexemeW jsForeachSource
---
--- >>> let jsForeachPatternV = parseLexemeV jsForeachPattern
--- >>> let jsForeachPatternVM = parseLexemeVW jsForeachPattern
---
--- >>> let cppForeachPatternV = parseLexemeV cppForeachPattern
--- >>> let cppForeachPatternVM = parseLexemeVW cppForeachPattern
---
--- >>> let scalaForeachPatternV = parseLexemeV scalaForeachPattern
--- >>> let scalaForeachPatternVM = parseLexemeVW scalaForeachPattern
 
 
 class Unparse a where
@@ -69,46 +48,16 @@ instance Unparse Whitespace where
     unparse (Comment s) = "//" ++ s
 
 type LexemeW = LexemeVW' Void ()
+type Source = [LexemeW]
+type Pattern = [LexemeVW]
 
-lwLexes :: [LexemeW] -> [Lexeme]
+lwLexes :: Source -> [Lexeme]
 lwLexes = mapMaybe lwLexemeOf
   where
     lwLexemeOf (LLex l) = Just l
     lwLexemeOf _         = Nothing
 
--- |
--- >>> mapM_ print jsForeachSourceW
--- Right (Alphanum "for")
--- Left (Blank " ")
--- Right (Open "(")
--- Right (Alphanum "let")
--- Left (Blank " ")
--- Right (Alphanum "i")
--- Left (Blank " ")
--- Right (Alphanum "of")
--- Left (Blank " ")
--- Right (Open "[")
--- Right (Alphanum "1")
--- Right (Symbol ",")
--- Right (Alphanum "2")
--- Right (Symbol ",")
--- Right (Alphanum "3")
--- Right (Close "]")
--- Right (Close ")")
--- Left (Blank " ")
--- Right (Open "{")
--- Right (Alphanum "console")
--- Right (Symbol ".")
--- Right (Alphanum "log")
--- Right (Open "(")
--- Right (Alphanum "i")
--- Right (Close ")")
--- Right (Symbol ";")
--- Right (Close "}")
---
--- >>> mapM_ print $ parseLexemeW "// important comment"
--- Left (Comment " important comment")
-parseLexemeW :: String -> [LexemeW]
+parseLexemeW :: String -> Source
 parseLexemeW [] = []
 parseLexemeW (c:cs) | isAlphaNum c = case parseLexemeW cs of
     LLex (Alphanum s) : ls -> LLex (Alphanum (c:s)) : ls
@@ -134,7 +83,7 @@ matchingParen :: String -> String
 matchingParen "{" = "}"
 matchingParen "[" = "]"
 matchingParen "(" = ")"
-matchingParen s   = error $ printf "unrecognized paren '%s'" s
+matchingParen s   = error $ "unrecognized paren '%s'"
 
 
 newtype Var = Var String
@@ -151,18 +100,6 @@ isVar _ = Nothing
 
 type LexemeV = LexemeVW' () Void
 
--- |
--- >>> mapM_ print jsForeachPatternV
--- Right (Alphanum "for")
--- Right (Open "(")
--- Right (Alphanum "let")
--- Left (Var "VAR")
--- Right (Alphanum "of")
--- Left (Var "LIST")
--- Right (Close ")")
--- Right (Open "{")
--- Left (Var "...")
--- Right (Close "}")
 parseLexemeV :: String -> [LexemeV]
 parseLexemeV = fmap go . lwLexes . parseLexemeW
   where
@@ -173,8 +110,8 @@ parseLexemeV = fmap go . lwLexes . parseLexemeW
 
 
 data LexemeVW' var white
-  = LVar' var Var
-  | LWhite' white Whitespace
+  = LVar' !var Var
+  | LWhite' !white Whitespace
   | LLex Lexeme
   deriving (Eq, Show, Ord, Generic)
 
@@ -192,26 +129,10 @@ pattern LWhite v <- LWhite' () v
     LWhite v = LWhite' () v
 
 {-# COMPLETE LLex, LVar, LWhite #-}
-{-# COMPLETE LLex, LVar, LWhite' #-}
-{-# COMPLETE LLex, LVar', LWhite' #-}
-{-# COMPLETE LLex, LVar', LWhite #-}
+{-# COMPLETE LLex, LVar #-}
+{-# COMPLETE LLex, LWhite #-}
 
 
--- |
--- >>> mapM_ print scalaForeachPatternVM
--- Left (Var "LIST")
--- Right (Right (Symbol "."))
--- Right (Right (Alphanum "foreach"))
--- Right (Left (Blank " "))
--- Right (Right (Open "{"))
--- Right (Left (Blank " "))
--- Left (Var "VAR")
--- Right (Left (Blank " "))
--- Right (Right (Symbol "=>"))
--- Right (Left (Blank " "))
--- Left (Var "...")
--- Right (Left (Blank " "))
--- Right (Right (Close "}"))
 parseLexemeVW :: String -> [LexemeVW]
 parseLexemeVW = fmap expandVars . parseLexemeW
 
@@ -225,15 +146,12 @@ expandVars (LVar' void _) = absurd void
 
 data Subst1 = Subst1
   { substVar :: Var
-  , substReplacement :: [LexemeW]
+  , substReplacement :: Source
   }
   deriving (Eq, Show, Ord, Generic)
 
 type Subst = [Subst1]
 
--- | only substitute the first occurrence of one variable.
--- >>> unparse $ substitute11 (Var "VAR", parseLexemeW "i") cppForeachPatternVM
--- "for (... i = LIST.begin(); VAR != LIST.end(); ++VAR) {...}"
 substitute11 :: Subst1 -> [LexemeVW] -> [LexemeVW]
 substitute11 (Subst1 var replacement) = go
   where
@@ -242,9 +160,6 @@ substitute11 (Subst1 var replacement) = go
     go (LVar v:xs) | v == var = fmap lwToLVW replacement ++ xs
     go (x     :xs)            = x : go xs
 
--- | substitute all occurrences of one variable.
--- >>> unparse $ substitute1 (Var "VAR", parseLexemeW "i") cppForeachPatternVM
--- "for (... i = LIST.begin(); i != LIST.end(); ++i) {...}"
 substitute1 :: Subst1 -> [LexemeVW] -> [LexemeVW]
 substitute1 subst = concatMap $ subst1 subst
 
@@ -257,23 +172,7 @@ lwToLVW (LVar' _ w)   = LVar w
 lwToLVW (LWhite' _ w) = LWhite w
 lwToLVW (LLex w)      = LLex w
 
--- | Substitute all occurrences of all variables.
---
--- The same variable (usually "...") can appear more than once in the
--- replacements, in which case each occurrence of that variable in the input
--- will be replaced with the corresponding replacement.
--- A variable can also appear once in the replacements, in which case all the
--- occurrences of that variable in the input will become that replacement.
---
--- >>> :{
--- unparse $ substitute [ (Var "...", parseLexemeW "map<int,string>::key_iterator")
---                      , (Var "VAR", parseLexemeW "i")
---                      , (Var "LIST", parseLexemeW "myMap.keys")
---                      , (Var "...", parseLexemeW "cout << *i << endl;")
---                      ] cppForeachPatternVM
--- :}
--- "for (map<int,string>::key_iterator i = myMap.keys.begin(); i != myMap.keys.end(); ++i) {cout << *i << endl;}"
-substitute :: Subst -> [LexemeVW] -> [LexemeW]
+substitute :: Subst -> [LexemeVW] -> Source
 substitute replacements = fmap assertR
                         . substituteAll replacements
                         . substituteOnce replacements
@@ -288,28 +187,21 @@ substitute replacements = fmap assertR
     substituteAll = compose . fmap substitute1
 
     assertR :: LexemeVW -> LexemeW
-    assertR (LVar (Var var)) = error $ printf "'%s' not in scope" var
+    assertR (LVar (Var var)) = error $ "'%s' not in scope"
     assertR (LWhite x) = LWhite x
     assertR (LLex x) = LLex x
 
 
-type Parser a = StateT [LexemeW] [] a
+type Parser a = StateT Source [] a
 
-runParser :: Parser a -> [LexemeW] -> Maybe (a, [LexemeW])
+runParser :: Parser a -> Source -> Maybe (a, Source)
 runParser parser input = case runStateT parser input of
     []    -> Nothing
     (x:_) -> Just x
 
-evalParser :: Parser a -> [LexemeW] -> Maybe a
+evalParser :: Parser a -> Source -> Maybe a
 evalParser parser = fmap fst . runParser parser
 
--- |
--- >>> evalParser (pMaybeToken Just) $ parseLexemeW "..."
--- Just (Right (Symbol "..."))
--- >>> evalParser (pMaybeToken (const Nothing)) $ parseLexemeW "..."
--- Nothing
--- >>> evalParser (pMaybeToken Just) $ parseLexemeW ""
--- Nothing
 pMaybeToken :: (LexemeW -> Maybe a) -> Parser a
 pMaybeToken p = do
     (x:xs) <- get
@@ -331,11 +223,6 @@ pWhitespace = pMaybeToken go
     go (LWhite w) = Just w
     go _ = Nothing
 
--- | greedily eat as much whitespace as possible
--- >>> testParser pWhitespaces "// important comment"
--- Just "// important comment"
--- >>> testParser pWhitespaces " \n / "
--- Just " \n "
 pWhitespaces :: Parser [Whitespace]
 pWhitespaces = ((:) <$> pWhitespace <*> pWhitespaces)
            <|> return []
@@ -384,34 +271,20 @@ pFlatLexeme = pMaybeToken go
     go _ = Nothing
 
 -- match as little as possible, possibly nothing.
-pWildcard0 :: Parser [LexemeW]
+pWildcard0 :: Parser Source
 pWildcard0 = return []
          <|> ((++) <$> pNesting     <*> pWildcard0)
          <|> ((:)  <$> pFlatLexemeW <*> pWildcard0)
 
--- | match as little as possible, but at least one lexeme.
--- >>> testParser pWildcard "foo.bar(baz)"
--- Just "foo"
--- >>> testParser pWildcard " foo.bar(baz)"
--- Just " foo"
--- >>> testParser pWildcard "(foo ~ bar).apply(baz)"
--- Just "(foo ~ bar)"
--- >>> testParser pWildcard "(foo ~ bar].apply(baz)"
--- *** Exception: mismatched parens: '(' and ']'
-pWildcard :: Parser [LexemeW]
+pWildcard :: Parser Source
 pWildcard = ((++) <$> pNesting                <*> pWildcard0)
         <|> ((:)  <$> (LLex <$> pFlatLexeme) <*> pWildcard0)
         <|> ((:)  <$> (LWhite  <$> pWhitespace) <*> pWildcard )
 
--- | like pWildcard, plus extra whitespace.
--- >>> testParser pWildcardW "foo.bar(baz)"
--- Just "foo"
--- >>> testParser pWildcardW "  foo // important comment\n    .bar(baz)"
--- Just "  foo // important comment\n    "
-pWildcardW :: Parser [LexemeW]
+pWildcardW :: Parser Source
 pWildcardW = (++) <$> pWildcard <*> (fmap LWhite <$> pWhitespaces)
 
-pNesting :: Parser [LexemeW]
+pNesting :: Parser Source
 pNesting = do
     sOpen <- pOpen
     xs <- pWildcard0
@@ -420,14 +293,14 @@ pNesting = do
     then return $ [LLex (Open sOpen)]
                ++ xs
                ++ [LLex (Close sClose)]
-    else error $ printf "mismatched parens: '%s' and '%s'" sOpen sClose
+    else error $ "mismatched parens: '%s' and '%s'"
 
 
 pMatchVar :: Var -> Parser Subst1
 pMatchVar v = Subst1 <$> pure v <*> (clean <$> pWildcardW)
   where
     -- remove blanks at the beginning and end
-    clean :: [LexemeW] -> [LexemeW]
+    clean :: Source -> Source
     clean = reverse
           . dropWhile isBlank
           . reverse
@@ -445,39 +318,14 @@ pMatchPattern (LLex x:xs) = pWhitespaces
 pMatchPattern (LVar  v:xs) = (:) <$> pMatchVar v <*> pMatchPattern xs
 pMatchPattern (LWhite' void _:_) = absurd void
 
-
--- |
--- >>> :{
--- let test fromPattern toPattern input = unparse
---                                      $ transliterate (parseLexemeV fromPattern)
---                                                      (parseLexemeVW toPattern)
---                                                      (parseLexemeW input)
--- :}
---
--- >>> test jsForeachPattern scalaForeachPattern jsForeachSource
--- "[1,2,3].foreach { i => console.log(i); }"
---
--- >>> :{
--- test "for (CTOR<TYPE>::iterator VAR = LIST.begin(); VAR != LIST.end(); ++VAR) {...}"
---      "LIST.foreach { VAR: TYPE => ... }"
---      "for (vector<int>::iterator i = myVector.begin(); i != myVector.end(); ++i) {cout << *i << endl;}"
--- :}
--- "myVector.foreach { i: int => cout << *i << endl; }"
---
--- >>> :{
--- test "cout << *EXPR << endl;"
---      "println(EXPR)"
---      "myVector.foreach { i: int => cout << *i << endl; }"
--- :}
--- "myVector.foreach { i: int =>println(i) }"
 transliterate :: [LexemeV] -> [LexemeVW]
-              -> [LexemeW] -> [LexemeW]
+              -> Source -> Source
 transliterate patternFrom patternTo = go
   where
     parser :: Parser Subst
     parser = pMatchPattern patternFrom
 
-    go :: [LexemeW] -> [LexemeW]
+    go :: Source -> Source
     go [] = []
     go (x:xs) = case runParser parser (x:xs) of
         Just (subst, xs') -> substitute subst patternTo
@@ -485,6 +333,31 @@ transliterate patternFrom patternTo = go
         Nothing -> x : go xs
 
 
+var :: Var -> LexemeVW' () a
+var = LVar
+
+lex :: Lexeme -> LexemeVW' a b
+lex = LLex
+
+white :: Whitespace -> LexemeVW' a ()
+white = LWhite
+
+mkSubst :: Var -> Source -> Subst1
+mkSubst = Subst1
+
+both :: Source -> Source -> Source
+both = (++)
+
+bothP :: Pattern -> Pattern -> Pattern
+bothP = (++)
+
+emptyP :: Pattern
+emptyP = []
+
+loosen :: LexemeW -> LexemeVW
+loosen (LLex x) = LLex x
+loosen (LWhite w) = LWhite w
+
 main :: IO ()
-main = doctest ["src/Main.hs"]
+main = pure ()
 
